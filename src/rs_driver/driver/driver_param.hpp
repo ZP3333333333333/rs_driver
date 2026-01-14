@@ -217,7 +217,7 @@ struct RSDecoderParam  ///< LiDAR decoder parameter
 {
   float min_distance = 0.0f;     ///< min/max distances of point cloud range. valid if min distance or max distance > 0
   float max_distance = 0.0f; 
-  bool use_lidar_clock = false;  ///< true: use LiDAR clock as timestamp; false: use system clock as timestamp
+  bool use_lidar_clock = true;  ///< true: use LiDAR clock as timestamp; false: use system clock as timestamp
   bool dense_points = false;     ///< true: discard NAN points; false: reserve NAN points
   bool ts_first_point = false;   ///< true: time-stamp point cloud with the first point; false: with the last point;
   bool wait_for_difop = true;    ///< true: start sending point cloud until receive difop packet
@@ -262,7 +262,7 @@ struct RSInputParam  ///< The LiDAR input parameter
 {
   uint16_t msop_port = 6699;                   ///< Msop packet port number
   uint16_t difop_port = 7788;                  ///< Difop packet port number
-  uint16_t imu_port = 0;                  ///< IMU packet port number, default disable
+  uint16_t imu_port = 6688;                  ///< IMU packet port number, default disable
   uint16_t user_layer_bytes = 0;    ///< Bytes of user layer. thers is no user layer if it is 0
   uint16_t tail_layer_bytes = 0;    ///< Bytes of tail layer. thers is no tail layer if it is 0
 
