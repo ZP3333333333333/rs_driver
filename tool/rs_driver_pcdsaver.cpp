@@ -42,6 +42,8 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
+#include <cstdint>
+#include <vector>
 using namespace robosense::lidar;
 
 typedef PointCloudT<PointXYZIRT> PointCloudMsg;
@@ -57,6 +59,20 @@ std::string IMU_CSV_PATH   = "./RAW_IMU.csv"; // 变更含义：实际CSV路径�
 std::mutex g_imu_csv_mtx;
 std::ofstream g_imu_csv;
 bool g_imu_csv_inited = false;
+
+// 二进制点结构：对应 header 的 FIELDS/SIZE/TYPE/COUNT
+#pragma pack(push, 1)
+struct PcdPointBin
+{
+  float x;
+  float y;
+  float z;
+  float intensity;
+  double timestamp;   // SIZE 8 + TYPE F => double 也算 float 类
+  uint16_t ring;
+};
+#pragma pack(pop)
+static_assert(sizeof(PcdPointBin) == (4+4+4+4+8+2), "PcdPointBin size must be 26 bytes.");
 
 static void initImuCsvOnce()
 {
@@ -334,66 +350,72 @@ unsigned long long get_utc_time_ms(void)
 }
 void savePcd(const std::string &pcd_path, const PointCloudMsg &cloud)
 {
-  
   RS_MSG << "Save point cloud as " << pcd_path << RS_REND;
-  unsigned long long utc_ms = get_utc_time_ms();
-    printf("当前UTC时间(毫秒): %llu\n", utc_ms);
-
+unsigned long long utc_ms = get_utc_time_ms();
+   printf("当前UTC时间(毫秒): %llu\n", utc_ms);
   std::shared_ptr<ImuData> current_imu;
   bool has_valid_imu = getLatestValidImu(current_imu);
+  (void)has_valid_imu; // 你目前没用 IMU 写入 PCD，这里避免告警
 
-  std::ofstream os(pcd_path, std::ios::out | std::ios::trunc);
-  // os << "# .PCD v0.7 - Point Cloud Data file format" << std::endl;
-  // -------------------------- 写入IMU数据到PCD头部 --------------------------
-//   os << "# ======================================================================" << std::endl;
-//   os << "# --------------- RoboSense LiDAR IMU Data (from PCAP) ---------------" << std::endl;
-//   os << "# ======================================================================" << std::endl;
-//   if (has_valid_imu)
-//   {
-//     os << "# IMU_Valid: true" << std::endl;
-//     int64_t ts_ns = static_cast<int64_t>(current_imu->timestamp * 1e9);
-
-// os << "# IMU_Timestamp: " << ts_ns << " ns" << std::endl;
-
-//     // os << "# IMU_Timestamp: " << current_imu->timestamp << " ns" << std::endl;
-    
-//     os << "# IMU_Orientation(Quaternion): x=" << current_imu->orientation_x << " y=" << current_imu->orientation_y << " z=" << current_imu->orientation_z << " w=" << current_imu->orientation_w << std::endl;
-//     os << "# IMU_Angular_Velocity: x=" << current_imu->angular_velocity_x << " y=" << current_imu->angular_velocity_y << " z=" << current_imu->angular_velocity_z << " rad/s" << std::endl;
-//     os << "# IMU_Linear_Acceleration: x=" << current_imu->linear_acceleration_x << " y=" << current_imu->linear_acceleration_y << " z=" << current_imu->linear_acceleration_z << " m/s²" << std::endl;
-//   }
-//   else
-//   {
-//     os << "# IMU_Valid: false (no valid IMU data for this frame)" << std::endl;
-//   }
-//   os << "# ======================================================================" << std::endl;
-
-  // PCD头部
-  os << "VERSION 0.7" << std::endl;
-  os << "FIELDS x y z intensity timestamp ring" << std::endl;
-  os << "SIZE 4 4 4 4 8 2" << std::endl;
-  os << "TYPE F F F F F U" << std::endl;
-  os << "COUNT 1 1 1 1 1 1" << std::endl;
-  os << "WIDTH " << cloud.points.size() << std::endl;
-  os << "HEIGHT 1" << std::endl;
-  os << "VIEWPOINT 0 0 0 1 0 0 0" << std::endl;
-  os << "POINTS " << cloud.points.size() << std::endl;
-  os << "DATA ascii" << std::endl;
-
-  // 原有点云数据写入，完全不变
-  os << std::fixed << std::setprecision(5);   // 5位小数
-  for (size_t i = 0; i < cloud.points.size(); i++)
+  std::ofstream os(pcd_path, std::ios::out | std::ios::trunc | std::ios::binary);
+  if (!os.is_open())
   {
-    // const PointXYZI& p = cloud.points[i];
-    const PointXYZIRT& p = cloud.points[i];
-    // printf("cloud.timestamp timestamp=%f\n",cloud.timestamp);
-    // 点的时间（秒）
-    os << p.x << " " << p.y << " " << p.z << " " << (float)p.intensity
-     << " " << p.timestamp   // 第5列：时间戳(秒)
-     << " " << p.ring
-     << std::endl;
+    RS_ERROR << "Failed to open " << pcd_path << RS_REND;
+    if (current_imu) free_imu_queue.push(current_imu);
+    return;
   }
 
-  // ========== 核心：用完的IMU对象，归还到【空闲队列】实现复用 ==========
+  // -------- PCD 头（必须是 ASCII 文本，且用 \n 不要 std::endl）--------
+  os << "VERSION 0.7\n";
+  os << "FIELDS x y z intensity timestamp ring\n";
+  os << "SIZE 4 4 4 4 8 2\n";
+  os << "TYPE F F F F F U\n";
+  os << "COUNT 1 1 1 1 1 1\n";
+  os << "WIDTH " << cloud.points.size() << "\n";
+  os << "HEIGHT 1\n";
+  os << "VIEWPOINT 0 0 0 1 0 0 0\n";
+  os << "POINTS " << cloud.points.size() << "\n";
+  os << "DATA binary\n";   // ✅ binary 模式
+
+  // -------- 二进制点数据（DATA 行之后直接写二进制）--------
+  // 用小块缓冲写，减少 write 调用次数（嵌入式很关键）
+  constexpr size_t CHUNK = 4096;
+  std::vector<PcdPointBin> buf;
+  buf.reserve(CHUNK);
+
+  for (size_t i = 0; i < cloud.points.size(); i++)
+  {
+    const PointXYZIRT& p = cloud.points[i];
+
+    PcdPointBin q;
+    q.x = p.x;
+    q.y = p.y;
+    q.z = p.z;
+    q.intensity = static_cast<float>(p.intensity);
+    q.timestamp = static_cast<double>(p.timestamp);
+    q.ring = static_cast<uint16_t>(p.ring);
+
+    buf.push_back(q);
+
+    if (buf.size() == CHUNK)
+    {
+      os.write(reinterpret_cast<const char*>(buf.data()),
+               static_cast<std::streamsize>(buf.size() * sizeof(PcdPointBin)));
+      buf.clear();
+    }
+  }
+
+  if (!buf.empty())
+  {
+    os.write(reinterpret_cast<const char*>(buf.data()),
+             static_cast<std::streamsize>(buf.size() * sizeof(PcdPointBin)));
+    buf.clear();
+  }
+
+  // 可选：每帧结束 flush 一次（通常不需要，关闭文件会 flush）
+  // os.flush();
+
+  // 用完的IMU对象归还对象池
   if (current_imu != nullptr)
   {
     free_imu_queue.push(current_imu);
