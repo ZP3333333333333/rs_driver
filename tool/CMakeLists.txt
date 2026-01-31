@@ -2,13 +2,12 @@
 cmake_minimum_required(VERSION 3.5)
 
 project(rs_driver_viewer)
-
 message(=============================================================)
 message("-- Ready to compile tools")
 message(=============================================================)
 
 include_directories(${DRIVER_INCLUDE_DIRS})
-
+option(COMPILE_LIB_PCDSAVER "Build rs_pcd_saver shared library" OFF)
 if (CMAKE_BUILD_TYPE STREQUAL "")
   set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -61,4 +60,8 @@ target_link_libraries(rs_driver_pcdsaver
                     ${EXTERNAL_LIBS})
 
 endif(${COMPILE_TOOL_PCDSAVER})
+if(COMPILE_LIB_PCDSAVER)
+  add_subdirectory(pcd_saver_lib)
+endif()
+
 

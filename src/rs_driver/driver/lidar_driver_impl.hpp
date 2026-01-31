@@ -42,7 +42,15 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <rs_driver/driver/decoder/decoder_factory.hpp>
 
 #include <sstream>
+#include <cstdio>
+#include <ctime>
 
+inline void print_now_ms()
+{
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  std::printf("process proket%lld\n", (long long)ts.tv_sec * 1000LL + (long long)ts.tv_nsec / 1000000LL);
+}
 namespace robosense
 {
 namespace lidar
@@ -434,8 +442,9 @@ inline void LidarDriverImpl<T_PointCloud>::processPacket()
     {
       continue;
     }
-
+    // print_now_ms();
     internalProcessPacket(pkt);
+
   }
 }
 
